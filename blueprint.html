@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reactive Particle Ring</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #050505;
+            font-family: 'Arial', sans-serif;
+        }
+        canvas {
+            display: block;
+            position: fixed;
+            top: 0; left: 0;
+            z-index: 1;
+        }
+        .content-overlay {
+            position: relative;
+            z-index: 2;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            pointer-events: none;
+            text-align: center;
+        }
+        h1 { font-size: 2.5rem; margin-bottom: 0.5rem; font-weight: 500; }
+        p { color: #888; font-size: 1.1rem; margin-bottom: 3rem; }
+        .grid-container {
+            display: flex; gap: 20px; pointer-events: auto;
+        }
+        .card {
+            width: 100px; height: 100px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            display: flex; justify-content: center; align-items: center;
+            backdrop-filter: blur(5px);
+            cursor: pointer; transition: 0.3s;
+        }
+        .card:hover { background: rgba(255, 255, 255, 0.15); transform: scale(1.05); }
+    </style>
+</head>
+<body>
+
+    <div class="content-overlay">
+        <h1>Your space is ready</h1>
+        <p>Hover over the ring to interact</p>
+        
+        <div class="grid-container">
+            <div class="card">Media</div>
+            <div class="card">Text</div>
+            <div class="card">AI</div>
+        </div>
+    </div>
+
+    <!-- Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        // 1. SCENE SETUP
+        const scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(0x050505, 0.002);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 50;
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        // 2. CREATE AN INVISIBLE PLANE FOR MOUSE TRACKING
+        // We need a surface to project the mouse onto in 3D space
+        const planeGeometry = new THREE.PlaneGeometry(200, 200);
+        const planeMaterial = new THREE.MeshBasicMaterial({ visible: false });
+        const raycasterPlane = new THREE.Mesh(planeGeometry, planeMaterial);
+        scene.add(raycasterPlane);
+
+        // 3. PARTICLE SYSTEM SETUP
+        const particleCount = 5000;
+        const geometry = new THREE.BufferGeometry();
+        
+        const positions = new Float32Array(particleCount * 3); // Current position (x, y, z)
+        const initialPositions = new Float32Array(particleCount * 3); // Target position (where it wants to return)
+        
+        const radius = 25;   // Radius of the main circle
+        const spread = 4.5;    // Thickness of the ring
+
+        for (let i = 0; i < particleCount; i++) {
+            const i3 = i * 3;
+            
+            // Create a Ring / Torus shape
+            const theta = Math.random() * Math.PI * 2; // Angle around the circle
+            const r = radius + (Math.random() - 0.5) * spread; // Distance from center
+
+            const x = r * Math.cos(theta);
+            const y = r * Math.sin(theta);
+            const z = (Math.random() - 0.5) * spread; // Random depth thickness
+
+            // Set current position
+            positions[i3] = x;
+            positions[i3 + 1] = y;
+            positions[i3 + 2] = z;
+
+            // Save original position for the "return" animation
+            initialPositions[i3] = x;
+            initialPositions[i3 + 1] = y;
+            initialPositions[i3 + 2] = z;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+        // Use a soft circle texture for particles
+        const loader = new THREE.TextureLoader();
+        const circleSprite = loader.load('https://threejs.org/examples/textures/sprites/disc.png');
+
+        const material = new THREE.PointsMaterial({
+            size: 0.4,
+            map: circleSprite,
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.8,
+            alphaTest: 0.1
+        });
+
+        const particlesMesh = new THREE.Points(geometry, material);
+        scene.add(particlesMesh);
+
+        // 4. INTERACTION VARIABLES
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let intersectPoint = new THREE.Vector3();
+        let isHovering = false;
+
+        // Mouse Move Event
+        window.addEventListener('mousemove', (event) => {
+            // Normalize mouse coordinates (-1 to +1)
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        });
+
+        // 5. ANIMATION LOOP
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // A. RAYCASTING (Find where mouse is in 3D world)
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(raycasterPlane);
+
+            if (intersects.length > 0) {
+                isHovering = true;
+                // We must convert the world intersection point into the LOCAL space of the particlesMesh
+                // because the mesh is rotating.
+                intersectPoint.copy(intersects[0].point);
+                particlesMesh.worldToLocal(intersectPoint);
+            } else {
+                isHovering = false;
+            }
+
+            // B. PARTICLE PHYSICS
+            const pos = geometry.attributes.position.array;
+            
+            // Physics settings
+            const repulsionRadius = 10; // How big the "hole" is around the mouse
+            const repulsionStrength = 0.5; // How fast they fly away
+            const returnSpeed = 0.05; // How fast they heal back (0.01 = slow, 0.1 = fast)
+
+            for (let i = 0; i < particleCount; i++) {
+                const i3 = i * 3;
+                
+                // Current particle position (Local)
+                let px = pos[i3];
+                let py = pos[i3 + 1];
+                let pz = pos[i3 + 2];
+
+                // Target (Original) position
+                const ox = initialPositions[i3];
+                const oy = initialPositions[i3 + 1];
+                const oz = initialPositions[i3 + 2];
+
+                // Calculate distance from Particle to Mouse (in Local space)
+                const dx = px - intersectPoint.x;
+                const dy = py - intersectPoint.y;
+                // We ignore Z for distance so it feels like a 2D tunnel effect, 
+                // but you can include dz if you want spherical repulsion.
+                const distSq = dx * dx + dy * dy; 
+
+                // --- LOGIC: REPEL OR RETURN ---
+                
+                if (isHovering && distSq < repulsionRadius * repulsionRadius) {
+                    // 1. REPULSION
+                    const dist = Math.sqrt(distSq);
+                    const force = (repulsionRadius - dist) / repulsionRadius; // Stronger when closer
+                    
+                    // Normalize direction and push
+                    const angle = Math.atan2(dy, dx);
+                    
+                    pos[i3] += Math.cos(angle) * force * repulsionStrength;
+                    pos[i3 + 1] += Math.sin(angle) * force * repulsionStrength;
+                    // Optional: Push in Z slightly for 3D depth pop
+                    pos[i3 + 2] += force * 0.5; 
+
+                } else {
+                    // 2. RETURN (Smooth Lerp)
+                    // Move 5% of the way to the original position every frame
+                    pos[i3] += (ox - px) * returnSpeed;
+                    pos[i3 + 1] += (oy - py) * returnSpeed;
+                    pos[i3 + 2] += (oz - pz) * returnSpeed;
+                }
+            }
+
+            // Mark geometry as needs update (crucial for animation)
+            geometry.attributes.position.needsUpdate = true;
+
+            // C. ORBIT ROTATION
+            // Rotate the whole container to simulate orbiting
+            particlesMesh.rotation.z -= 0.002; 
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // Handle Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+    </script>
+</body>
+</html>
